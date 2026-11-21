@@ -1,0 +1,29 @@
+#    Java 1.21 bows, crossbows, tridents, throwables, wind charges, explosions and splash potions.
+mcl_java_pvp_ranged (Java ranged combat) bool true
+
+#    Java 1.21 exhaustion, natural regeneration, eating, food values, chorus fruit and death XP.
+mcl_java_pvp_hunger (Java hunger and food) bool true
+
+#    Java 1.21 potion durations, effect stacking and effect formulas.
+mcl_java_pvp_effects (Java potion effects) bool true
+
+#    Java jump height, gravity, acceleration, sprint-jump boost, Jump Boost, Slow Falling and water speeds.
+mcl_java_pvp_physics (Java movement physics) bool true
+
+#    Show the attack cooldown bar under the crosshair.
+mcl_java_pvp_cooldown_indicator (Attack cooldown indicator) bool true
+
+#    Swinging at nothing resets the attack cooldown, like Java.
+mcl_java_pvp_miss_resets_cooldown (Missed swings reset cooldown) bool true
+
+#    Equivalent of the naturalRegeneration game rule.
+mcl_java_pvp_natural_regeneration (Natural regeneration) bool true
+
+#    Maximum distance (eyes to hitbox) at which players can hit players. Java: 3.0.
+mcl_java_pvp_entity_reach (Entity reach) float 3.0 1.0 10.0
+
+#    Extra reach allowed to compensate for network lag.
+mcl_java_pvp_reach_tolerance (Reach lag tolerance) float 0.5 0.0 2.0
+
+#    Seconds of damage immunity after joining or respawning (not fall damage). Java: 3.
+mcl_java_pvp_spawn_invulnerability (Respawn invulnerability) float 3.0 0.0 10.0
