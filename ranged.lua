@@ -1036,7 +1036,9 @@ if has_mod("mcl_tridents") and mcl_tridents then
 							if ok2 and pbox[1] <= box[4] and pbox[4] >= box[1] and pbox[2] <= box[5]
 									and pbox[5] >= box[2] and pbox[3] <= box[6] and pbox[6] >= box[3] then
 								st.hit[obj] = true
-								local dmg = mcl_util.deal_damage(obj, 8, { type = "player", source = player, direct = player })
+								-- Fixed 8 (no Strength: not the attack damage attribute).
+								local dmg = mcl_util.deal_damage(obj, 8, { type = "player", source = player, direct = player,
+									attack_damage_applied = true, crit_handled = true })
 								if obj:is_player() then
 									local dir = vector.direction(player:get_pos(), obj:get_pos())
 									mcl_player.player_knockback(obj, player, dir, nil, dmg or 8)
@@ -1445,6 +1447,8 @@ local function explosion_affect_entities(pos, power, opts)
 									type = opts.damage_type or "explosion",
 									direct = opts.direct, source = opts.source,
 									pos = vector.copy(pos), explosion_pos = vector.copy(pos),
+									-- (No Strength even when direct == source.)
+									attack_damage_applied = true,
 								})
 							end
 							local kb = impact * (opts.knockback_multiplier or 1)

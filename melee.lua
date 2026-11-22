@@ -17,7 +17,7 @@
 --              entities near the target for 1 + ratio * damage
 --   cooldown : reset by attacking, switching items or swinging at air;
 --              T = 20 / attack_speed ticks, Haste +10%, Mining Fatigue -10%
---   reach    : 3 blocks (creative 5)
+--   reach    : 3 blocks (creative 5), also for hits on mobs and other entities
 --
 -- Mineclonia's PvP-specific on_punchplayer callbacks (damage, Fire Aspect,
 -- knockback, attack exhaustion) are skipped for player attackers.
@@ -263,6 +263,51 @@ local function mace_smash_effects(attacker, target, stack, fall)
 end
 
 ------------------------------------------------------------------------
+-- Reach
+------------------------------------------------------------------------
+-- Java: melee attacks reach 3 blocks (5 in creative) from the eyes to the
+-- target's hitbox, on players and entities alike.  Luanti points at nodes
+-- and objects with the same range (the 4.5 block reach), so the server
+-- turns down hits on anything farther away.
+
+-- The box a hit can land on: the collision box, grown to the selection box
+-- (what the client points at) where that is larger.
+local function hit_box(obj)
+	local pos = obj:get_pos()
+	local props = obj:get_properties()
+	local cb = props.collisionbox
+	local sb = props.selectionbox or cb
+	return {
+		pos.x + math.min(cb[1], sb[1]), pos.y + math.min(cb[2], sb[2]), pos.z + math.min(cb[3], sb[3]),
+		pos.x + math.max(cb[4], sb[4]), pos.y + math.max(cb[5], sb[5]), pos.z + math.max(cb[6], sb[6]),
+	}
+end
+
+function jp.in_reach(attacker, target)
+	local reach = jp.is_creative(attacker) and jp.ENTITY_REACH_CREATIVE or jp.ENTITY_REACH
+	return jp.dist_to_box(jp.eye_pos(attacker), hit_box(target)) <= reach + jp.REACH_TOLERANCE
+end
+
+-- A punch from the player's own hand or weapon, as opposed to one made on
+-- the player's behalf (arrows, snowballs, explosions, mace smash...).
+local function melee_punch(hitter, caps)
+	if mcl_damage.is_melee_punch then
+		return mcl_damage.is_melee_punch(hitter, caps)
+	end
+	if not (hitter and hitter:is_player() and caps) then return false end
+	local own = hitter:get_wielded_item():get_tool_capabilities()
+	if own.full_punch_interval ~= caps.full_punch_interval then return false end
+	local a, b = own.damage_groups or {}, caps.damage_groups or {}
+	for group, value in pairs(a) do
+		if b[group] ~= value then return false end
+	end
+	for group, value in pairs(b) do
+		if a[group] ~= value then return false end
+	end
+	return true
+end
+
+------------------------------------------------------------------------
 -- The attack
 ------------------------------------------------------------------------
 
@@ -275,11 +320,7 @@ function jp.player_attack(attacker, victim)
 	-- Can't attack while using an item (eating, drawing a bow, blocking).
 	if st.using_item then return end
 
-	-- Reach: 3 blocks (5 in creative) from the eyes to the target's hitbox.
-	local reach = jp.is_creative(attacker) and jp.ENTITY_REACH_CREATIVE or jp.ENTITY_REACH
-	if jp.dist_to_box(jp.eye_pos(attacker), jp.object_box(victim)) > reach + jp.REACH_TOLERANCE then
-		return
-	end
+	if not jp.in_reach(attacker, victim) then return end
 
 	local stack = attacker:get_wielded_item()
 	local base, _, kind = jp.weapon_stats(stack)
@@ -322,11 +363,15 @@ function jp.player_attack(attacker, victim)
 	local sweep = strong and not crit and not sprint_hit and st.on_ground
 		and kind == "sword" and hspeed * jp.TICK * 0.6 < 0.1
 
+	-- Strength/Weakness and the crit are already in the damage: tell
+	-- Mineclonia's modifiers (newer versions) not to add them again.
 	local reason = {
 		type = "player",
 		direct = attacker,
 		source = attacker,
 		jp_weapon = stack,
+		attack_damage_applied = true,
+		crit_handled = true,
 	}
 	mcl_damage.finish_reason(reason)
 
@@ -369,7 +414,8 @@ function jp.player_attack(attacker, victim)
 						and ob[2] <= box[5] + 0.25 and ob[5] >= box[2] - 0.25
 						and ob[3] <= box[6] + 1 and ob[6] >= box[3] - 1 then
 					knockback_any(obj, 0.4, fdx, fdz)
-					local r = { type = "player", direct = attacker, source = attacker, jp_weapon = stack }
+					local r = { type = "player", direct = attacker, source = attacker, jp_weapon = stack,
+						attack_damage_applied = true, crit_handled = true }
 					mcl_damage.finish_reason(r)
 					local ok = hurt(obj, sweep_damage, r)
 					if ok and fire > 0 then
@@ -410,9 +456,11 @@ end
 
 -- Player-vs-mob hits still use Mineclonia's mob combat; give them Java
 -- critical hits (x1.5 under the Java conditions) in place of the removed
--- random mcl_criticals bonus.
+-- random mcl_criticals bonus.  (Newer Mineclonia's mob combat does Java
+-- crits itself and marks the hit `crit_handled'.)
 mcl_damage.register_modifier(function(obj, damage, reason)
-	if obj:is_player() or reason.type ~= "player" or reason.jp_weapon then return end
+	if obj:is_player() or reason.type ~= "player" or reason.jp_weapon
+			or reason.crit_handled then return end
 	local hitter = reason.direct
 	if not (hitter and hitter:is_player() and hitter == reason.source) then return end
 	local st = jp.player_state(hitter)
@@ -441,16 +489,36 @@ do
 		local orig_on_use = def.on_use
 		core.override_item("mcl_tools:mace", {
 			on_use = function(itemstack, user, pointed_thing)
-				if pointed_thing.type == "object" and pointed_thing.ref
-						and is_pvp(pointed_thing.ref, user) then
-					jp.player_attack(user, pointed_thing.ref)
+				local target = pointed_thing.type == "object" and pointed_thing.ref
+				if target and is_pvp(target, user) then
+					jp.player_attack(user, target)
 					return user:get_wielded_item()
+				end
+				if target and target:is_valid() and not jp.in_reach(user, target) then
+					return
 				end
 				return orig_on_use(itemstack, user, pointed_thing)
 			end,
 		})
 	end
 end
+
+-- Melee hits on entities (mobs, boats, minecarts, armor stands, item
+-- frames...) from beyond the Java reach do nothing.
+core.register_on_mods_loaded(function()
+	for _, def in pairs(core.registered_entities) do
+		local on_punch = def.on_punch
+		def.on_punch = function(self, puncher, tflp, caps, ...)
+			if puncher and puncher:is_player() and melee_punch(puncher, caps)
+					and not jp.in_reach(puncher, self.object) then
+				return true
+			end
+			if on_punch then
+				return on_punch(self, puncher, tflp, caps, ...)
+			end
+		end
+	end
+end)
 
 ------------------------------------------------------------------------
 -- Knockback from non-player sources (mobs, arrows, tridents ...)

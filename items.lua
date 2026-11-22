@@ -93,8 +93,8 @@ end
 ------------------------------------------------------------------------
 -- Java: entity_interaction_range 3.0 (creative 5.0), block_interaction_range
 -- 4.5 (creative 5.0).  Luanti uses one `range` for both, so items keep the
--- 4.5 block reach and melee.lua rejects hits on players farther than 3.0
--- (+ a small latency allowance) from the attacker's eyes.
+-- 4.5 block reach and melee.lua rejects melee hits on players and entities
+-- farther than 3.0 (+ a small latency allowance) from the attacker's eyes.
 jp.ENTITY_REACH = jp.setting_number("entity_reach", 3.0)
 jp.ENTITY_REACH_CREATIVE = 5.0
 jp.REACH_TOLERANCE = jp.setting_number("reach_tolerance", 0.5)

@@ -7,7 +7,8 @@ mcl_java_pvp_hunger (Java hunger and food) bool true
 #    Java 1.21 potion durations, effect stacking and effect formulas.
 mcl_java_pvp_effects (Java potion effects) bool true
 
-#    Java jump height, gravity, acceleration, sprint-jump boost, Jump Boost, Slow Falling and water speeds.
+#    Java jump height, gravity, acceleration, sprint-jump boost, Jump Boost, Slow Falling and water speeds
+#    (left to mcl_movement in Mineclonia builds that have it), and the immediate slowdown when using an item.
 mcl_java_pvp_physics (Java movement physics) bool true
 
 #    Show the attack cooldown bar under the crosshair.

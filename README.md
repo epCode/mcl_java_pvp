@@ -19,7 +19,7 @@ functions.
 | `mcl_java_pvp_ranged` | true | Bows, crossbows, tridents, throwables, wind charges, explosions, splash potions |
 | `mcl_java_pvp_hunger` | true | Exhaustion, regeneration, eating, food values, chorus fruit, death XP |
 | `mcl_java_pvp_effects` | true | Potion durations, effect stacking, effect formulas |
-| `mcl_java_pvp_physics` | true | Gravity/jump, acceleration, sprint-jump boost, Jump Boost, Slow Falling, water speeds |
+| `mcl_java_pvp_physics` | true | Gravity/jump, acceleration, sprint-jump boost, Jump Boost, Slow Falling, water speeds (left to `mcl_movement` where the game has it); immediate slowdown when using an item |
 | `mcl_java_pvp_cooldown_indicator` | true | Attack-cooldown bar under the crosshair |
 | `mcl_java_pvp_miss_resets_cooldown` | true | Swinging at nothing resets the attack cooldown |
 | `mcl_java_pvp_natural_regeneration` | true | The `naturalRegeneration` game rule |
@@ -90,7 +90,7 @@ Status key:
 | 27 | Fire Aspect | Ignites on any punch (0 damage, blocked) | Only on a successful hit, 4 s/level; also sweep targets | Fixed |
 | 28 | Strength / Weakness | × 1.3 / × 1.6, × 0.8 / × 0.6 at the victim (order vs armor undefined) | +3 / −4 attack damage per level, before cooldown and crit | Fixed |
 | 29 | Haste / Mining Fatigue attack speed | Linear interval change; not for swords/mace/trident; Conduit Power counted | Attack speed × (1 + 0.1H) × (1 − 0.1F); no Conduit | Fixed |
-| 30 | Entity reach | 4.5 (creative 10) | 3.0 (creative 5.0); blocks 4.5 | Fixed (server-side check, +0.5 lag tolerance) |
+| 30 | Entity reach | 4.5 (creative 10) | 3.0 (creative 5.0) to players and entities; blocks 4.5 | Fixed (server-side check on melee hits, players and entities, +0.5 lag tolerance; the crosshair still selects out to 4.5) |
 | 31 | Attacking while eating, drawing a bow or blocking | Partly possible | Not possible | Fixed |
 | 32 | Durability per hit | Scaled down by the partial-cooldown factor | Swords/mace/trident 1, tools 2, always | Fixed |
 | 33 | Trident melee durability | None | 1 | Fixed |
@@ -114,6 +114,15 @@ Status key:
 | 9 | Unbreaking | Ignored | Applies | Fixed |
 
 ### 3. Damage pipeline and invulnerability
+
+Newer Mineclonia (the builds with `mcl_movement`) already has parts of this:
+`mcl_damage` applies the 10-tick hurt cooldown itself (between the
+modifiers below and above priority −10), Resistance runs after armor,
+Strength/Weakness are +3/−4 attack damage, and mob combat does Java crits.
+With those builds this mod uses that cooldown instead of a second one of
+its own, removes Mineclonia's Resistance and shield modifiers (replaced
+by its own), and marks its own attacks `attack_damage_applied` /
+`crit_handled` so Strength and crits are not added twice.
 
 | # | Mechanic | Mineclonia | Java 1.21 | Status |
 |---|---|---|---|---|
@@ -165,6 +174,25 @@ Status key:
 
 ### 6. Movement and physics
 
+Mineclonia builds that ship `mcl_movement` already drive the player physics
+like Java: gravity, jump, ground and air acceleration with Java's friction
+and air drag, the sprint-jump boost, water, Slow Falling and Jump Boost.
+With it loaded, this mod leaves those to `mcl_movement` (rows 1–5, 15–17:
+they would otherwise be applied twice) and passes knockback's horizontal
+velocity on unconverted, since `mcl_movement` applies the Java drag to it.
+Fall damage uses the Java formula of rows 12–13. Where `mcl_movement`
+offers `mcl_movement.deal_fall_damage`, its fall tracking (fresh position
+updates, teleport, bounce and liquid handling) supplies the fall distance
+and only the formula is replaced. Otherwise this mod tracks falls itself
+and drops `mcl_movement`'s damage so a fall counts once. Either way, a
+bounce off a slime block or bed, or a landing the server never saw because
+the player jumped again at once, ends the fall. Where `mcl_movement` offers them, this mod
+also registers its trident/spyglass slowdown as item use
+(`mcl_movement.register_item_use_factor`) and reports its knockback
+(`mcl_movement.notify_knockback`), so that being knocked off the ground
+while sprinting does not give the sprint-jump boost. The rows below
+describe Mineclonia without `mcl_movement`.
+
 | # | Mechanic | Mineclonia | Java 1.21 | Status |
 |---|---|---|---|---|
 | 1 | Jump | 6.6 m/s at 20.8 m/s²: 1.05 blocks, 0.63 s | 1.2522 blocks, 0.6 s | Fixed (27.8 m/s², 8.35 m/s: same apex and air time) |
@@ -173,9 +201,10 @@ Status key:
 | 4 | Sprint-jump boost | None (≈ 5.6 m/s sprint-jumping) | +0.2 b/t per jump (≈ 7.1 m/s average) | Fixed (server-applied, about one ping late) |
 | 5 | Air acceleration | 12 m/s² | Tuned so the boost decays like Java | Approx. |
 | 6 | Item-use slowdown | Eat/drink/bow/crossbow × 0.3, shield × 0.5, trident and spyglass none | × 0.2 for all | Fixed |
-| 7 | Sprinting while using items | Allowed to start | Can't start (continues if already sprinting) | Fixed |
+| 7 | Sprinting while using items | Allowed to start | Can't start; a sprint already running is kept for the sprint-jump boost ("eat while sprinting") but gives no sprint speed while the item is in use | Fixed |
+| 7b | Slowing down when starting to use an item | The engine scales acceleration by the × 0.2 speed factor: ≈ 0.5 s of coasting at running speed | Ground friction: a few ticks | Fixed (acceleration restored while an item is in use) |
 | 8 | Sprinting while blind | Allowed | Blocked/stopped | Fixed |
-| 9 | Sprint stop on wall collision | No | Yes (but resumes next tick if the key is held) | Not changed (no practical difference with the sprint key held) |
+| 9 | Sprint stop on wall collision | No | Yes (but resumes next tick if the key is held) | Not changed (no practical difference with the sprint key held; `mcl_movement` does stop it) |
 | 10 | Double-tap W to sprint | No | Yes | Not changed (Luanti uses the Aux1 key as the sprint key) |
 | 11 | Hitbox | 0.624 × 1.795 (sneak 1.495, elytra 0.7 × 0.8) | 0.6 × 1.8 (sneak 1.5, swim/elytra 0.6 × 0.6) | Fixed |
 | 12 | Fall damage | Engine: `round(v − 14)`, none below ≈ 5 blocks (≈ 9 at old gravity) | `ceil(distance − 3 − JumpBoost)` | Fixed |

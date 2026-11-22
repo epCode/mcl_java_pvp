@@ -11,6 +11,10 @@ local jp = mcl_java_pvp
 
 jp.TICK = 0.05
 
+-- Mineclonia builds with mcl_movement emulate Java's per-tick friction and
+-- air drag for players on the default client (see movement.lua).
+jp.has_mcl_movement = rawget(_G, "mcl_movement") ~= nil
+
 ------------------------------------------------------------------------
 -- Settings
 ------------------------------------------------------------------------
@@ -66,12 +70,39 @@ function jp.remove_damage_modifiers(predicate, description)
 	return removed
 end
 
+-- `priority` may be nil (any), a number or a list of numbers (Mineclonia
+-- versions differ in where they put some modifiers).
+local function priority_matches(priority, prio)
+	if priority == nil then return true end
+	if type(priority) ~= "table" then return prio == priority end
+	for _, p in ipairs(priority) do
+		if prio == p then return true end
+	end
+	return false
+end
+
+local function priority_text(priority)
+	if priority == nil then return "" end
+	if type(priority) ~= "table" then return " prio " .. priority end
+	return " prio " .. table.concat(priority, "/")
+end
+
 -- Remove the damage modifier defined in a given file (and optionally at a
--- given priority).
+-- given priority and line).
 function jp.remove_modifier_from(suffix, priority, line)
 	return jp.remove_damage_modifiers(function(f, prio)
-		return jp.func_is(f, suffix, line) and (priority == nil or prio == priority)
-	end, suffix .. (priority and (" prio " .. priority) or ""))
+		return jp.func_is(f, suffix, line) and priority_matches(priority, prio)
+	end, suffix .. priority_text(priority))
+end
+
+-- Is there a damage modifier defined in a given file (at a priority)?
+function jp.has_modifier_from(suffix, priority, line)
+	for _, m in ipairs(mcl_damage.modifiers) do
+		if jp.func_is(m.func, suffix, line) and priority_matches(priority, m.priority) then
+			return true
+		end
+	end
+	return false
 end
 
 -- Wrap every function in list `list` (e.g. core.registered_on_punchplayers)
@@ -213,20 +244,34 @@ local function java_ground_slide(vh)
 	return vh * 0.546 / (1 - 0.546)
 end
 
+-- mcl_movement's player gravity (0.08 b/t^2), without the factors it
+-- varies per step for air drag and Slow Falling.
+local MCL_MOVEMENT_GRAVITY = 32
+
+-- Gravity a launched player rises under (m/s^2).
+local function launch_gravity(player)
+	if jp.has_mcl_movement then return MCL_MOVEMENT_GRAVITY end
+	return jp.engine_physics(player).g
+end
+
 -- Vertical launch: the Luanti velocity (m/s) that reaches the same apex as
 -- a Java vertical velocity vy (b/t).  Negative velocities are passed
 -- through unchanged.
 function jp.java_vy_to_luanti(vy, player)
 	if vy <= 0 then return vy * 20 end
-	local phys = jp.engine_physics(player)
 	local apex = simulate_java(0, vy)
-	return math.sqrt(2 * phys.g * apex)
+	return math.sqrt(2 * launch_gravity(player) * apex)
 end
 
 -- Convert a Java velocity set by knockback (horizontal speed vh and
 -- vertical vy, both b/t) into Luanti m/s so that the victim travels the
 -- same horizontal distance and reaches the same height.
 function jp.java_knockback_to_luanti(vh, vy, player)
+	if jp.has_mcl_movement then
+		-- mcl_movement applies Java's take-off friction and air drag to
+		-- the horizontal velocity itself, so it is passed on as is.
+		return vh * 20, jp.java_vy_to_luanti(vy, player)
+	end
 	local phys = jp.engine_physics(player)
 	local apex, ticks, air_dist, land_vh = simulate_java(vh, vy)
 	local dist = air_dist + java_ground_slide(land_vh)
@@ -327,6 +372,10 @@ function jp.set_java_velocity(player, vx, vy, vz)
 		-- The Mineclonia CSM simulates Java physics; send directly.
 		mcl_serverplayer.send_knockback(player, vector.new(vx * 20, vy * 20, vz * 20))
 		return
+	end
+	if jp.has_mcl_movement and mcl_movement.notify_knockback then
+		-- Leaving the ground from this is not a jump (no sprint-jump boost).
+		mcl_movement.notify_knockback(player)
 	end
 	local vh = math.sqrt(vx * vx + vz * vz)
 	local vh_l, vy_l = jp.java_knockback_to_luanti(vh, vy, player)

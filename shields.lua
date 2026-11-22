@@ -149,9 +149,11 @@ function mcl_shields.add_wear(obj, damage, blockstack, n)
 end
 
 -- Replace Mineclonia's shield damage modifier (priority 0, i.e. in an
--- undefined order relative to armor) with one that runs before
--- invulnerability and armor, like Java.
-jp.remove_modifier_from("mcl_shields/init.lua", 0)
+-- undefined order relative to armor; -20 in newer Mineclonia) with one
+-- that runs before invulnerability and armor, like Java.  Both versions
+-- block with Mineclonia's own arc and raise rules, so keeping it would
+-- block hits this one lets through.
+jp.remove_modifier_from("mcl_shields/init.lua", { 0, -20 })
 
 mcl_damage.register_modifier(function(obj, damage, reason)
 	if not obj:is_player() or damage <= 0 then return end

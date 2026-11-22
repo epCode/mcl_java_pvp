@@ -14,6 +14,14 @@
 --     -45 shield (shields.lua)                 -40 hurt invulnerability
 --      10 armor -> Resistance -> EPF -> Thorns 300 absorption (kept)
 --    1000 totem (kept)
+--
+-- Newer Mineclonia (with mcl_movement) already does part of this: its
+-- mcl_damage applies the hurt cooldown itself between the modifiers below
+-- and above mcl_damage.COOLDOWN_PRIORITY (-10), Resistance runs after armor
+-- (priority 10), shields at -20, and Strength/Weakness are +3/-4 attack
+-- damage for attacks not marked `attack_damage_applied'.  There this file
+-- uses that cooldown instead of its own and removes the Resistance and
+-- shield modifiers it replaces; this mod's own attacks are marked.
 
 local jp = mcl_java_pvp
 
@@ -24,12 +32,17 @@ local jp = mcl_java_pvp
 -- Random additive crits and sprint "knockback" (melee.lua does Java crits).
 jp.remove_modifier_from("mcl_criticals/init.lua")
 -- Multiplicative Strength/Weakness (melee.lua: +3 / -4 attack damage).
-jp.remove_modifier_from("mcl_potions/functions.lua", 0)
+-- Newer Mineclonia has Java's additive version at -150 instead, which
+-- leaves alone attacks marked attack_damage_applied (all of this mod's) and
+-- still covers mobs: keep that one.
+if not jp.has_modifier_from("mcl_potions/functions.lua", -150) then
+	jp.remove_modifier_from("mcl_potions/functions.lua", 0)
+end
 -- Resistance before armor (re-implemented after armor below).  Resistance
--- (priority -50) and Absorption (priority 300) are closures created by the
--- `dmg_flag == ""` branch of generate_modifier_func in mcl_potions; Fire
--- Resistance comes from another branch.  Find that branch's line in the
--- source so the right closure is removed.
+-- (priority -50; 10 in newer Mineclonia) and Absorption (priority 300) are
+-- closures created by the `dmg_flag == ""` branch of generate_modifier_func
+-- in mcl_potions; Fire Resistance comes from another branch.  Find that
+-- branch's line in the source so the right closure is removed.
 do
 	local line
 	local f = io.open(core.get_modpath("mcl_potions") .. "/functions.lua", "r")
@@ -45,7 +58,7 @@ do
 		f:close()
 	end
 	if line then
-		jp.remove_modifier_from("mcl_potions/functions.lua", -50, line)
+		jp.remove_modifier_from("mcl_potions/functions.lua", { -50, 10 }, line)
 	else
 		core.log("warning", "[mcl_java_pvp] Resistance modifier not found; Resistance may apply twice")
 	end
@@ -116,7 +129,6 @@ end
 -- shield, before armor.
 
 jp.IFRAME_TIME = 0.5
-local hurt = jp.player_table() -- player -> {last = amount, time = t}
 
 -- Result of the latest damage event per player, for knockback decisions:
 --   fresh   = the hit started a new invulnerability window (base knockback)
@@ -124,50 +136,96 @@ local hurt = jp.player_table() -- player -> {last = amount, time = t}
 --   blocked = a shield blocked it
 jp.last_hurt = jp.player_table()
 
-function jp.in_iframes(player)
-	local h = hurt[player]
-	return h and (jp.now() - h.time) < jp.IFRAME_TIME
-end
-
-function jp.reset_iframes(player)
-	hurt[player] = nil
-end
-
--- Called by shields.lua when a hit is fully blocked (Java still starts the
--- invulnerability window with lastHurt = 0 if none was active).
-function jp.register_blocked_hit(player)
-	if not jp.in_iframes(player) then
-		hurt[player] = { last = 0, time = jp.now() }
+-- Every hit starts out as not applied: a modifier that cancels it (respawn
+-- invulnerability, a shield...) must not leave the previous hit's result.
+mcl_damage.register_modifier(function(obj)
+	if obj:is_player() then
+		jp.last_hurt[obj] = { fresh = false, applied = false, time = jp.now() }
 	end
-	jp.last_hurt[player] = { fresh = false, applied = false, blocked = true, time = jp.now() }
-end
+end, -math.huge)
 
-mcl_damage.register_modifier(function(obj, damage, reason)
-	if not obj:is_player() or damage <= 0 then return end
-	local now = jp.now()
-	if reason.flags.bypasses_invulnerability then
+if mcl_damage.apply_hurt_cooldown and mcl_damage.get_player_hurt_state
+		and mcl_damage.COOLDOWN_PRIORITY then
+	-- Mineclonia's own hurt cooldown (same rules; mcl_damage.time clock,
+	-- 10 ticks less its rounding allowance).
+	local WINDOW = jp.IFRAME_TIME - 0.025
+
+	local function in_window(state)
+		return state._hurt_stamp ~= nil and mcl_damage.time - state._hurt_stamp < WINDOW
+	end
+
+	function jp.in_iframes(player)
+		return in_window(mcl_damage.get_player_hurt_state(player))
+	end
+
+	function jp.reset_iframes(player)
+		local state = mcl_damage.get_player_hurt_state(player)
+		state._hurt_stamp, state._last_hurt = nil, nil
+	end
+
+	function jp.register_blocked_hit(player)
+		local state = mcl_damage.get_player_hurt_state(player)
+		if not in_window(state) then
+			state._hurt_stamp, state._last_hurt = mcl_damage.time, 0
+		end
+		jp.last_hurt[player] = { fresh = false, applied = false, blocked = true, time = jp.now() }
+	end
+
+	-- Runs right after the cooldown, only for hits it let through
+	-- (`partial_hurt': only the excess over the last hit, no knockback).
+	mcl_damage.register_modifier(function(obj, damage, reason)
+		if obj:is_player() and damage > 0 then
+			jp.last_hurt[obj] = { fresh = not reason.partial_hurt, applied = true, time = jp.now() }
+		end
+	end, mcl_damage.COOLDOWN_PRIORITY)
+else
+	local hurt = jp.player_table() -- player -> {last = amount, time = t}
+
+	function jp.in_iframes(player)
+		local h = hurt[player]
+		return h and (jp.now() - h.time) < jp.IFRAME_TIME
+	end
+
+	function jp.reset_iframes(player)
+		hurt[player] = nil
+	end
+
+	-- Called by shields.lua when a hit is fully blocked (Java still starts
+	-- the invulnerability window with lastHurt = 0 if none was active).
+	function jp.register_blocked_hit(player)
+		if not jp.in_iframes(player) then
+			hurt[player] = { last = 0, time = jp.now() }
+		end
+		jp.last_hurt[player] = { fresh = false, applied = false, blocked = true, time = jp.now() }
+	end
+
+	mcl_damage.register_modifier(function(obj, damage, reason)
+		if not obj:is_player() or damage <= 0 then return end
+		local now = jp.now()
+		if reason.flags.bypasses_invulnerability then
+			jp.last_hurt[obj] = { fresh = true, applied = true, time = now }
+			return damage
+		end
+		local h = hurt[obj]
+		if h and now - h.time < jp.IFRAME_TIME then
+			if damage <= h.last then
+				jp.last_hurt[obj] = { fresh = false, applied = false, time = now }
+				return 0
+			end
+			local excess = damage - h.last
+			h.last = damage
+			jp.last_hurt[obj] = { fresh = false, applied = true, time = now }
+			return excess
+		end
+		hurt[obj] = { last = damage, time = now }
 		jp.last_hurt[obj] = { fresh = true, applied = true, time = now }
 		return damage
-	end
-	local h = hurt[obj]
-	if h and now - h.time < jp.IFRAME_TIME then
-		if damage <= h.last then
-			jp.last_hurt[obj] = { fresh = false, applied = false, time = now }
-			return 0
-		end
-		local excess = damage - h.last
-		h.last = damage
-		jp.last_hurt[obj] = { fresh = false, applied = true, time = now }
-		return excess
-	end
-	hurt[obj] = { last = damage, time = now }
-	jp.last_hurt[obj] = { fresh = true, applied = true, time = now }
-	return damage
-end, -40)
+	end, -40)
 
-core.register_on_respawnplayer(function(player)
-	hurt[player] = nil
-end)
+	core.register_on_respawnplayer(function(player)
+		hurt[player] = nil
+	end)
+end
 
 ------------------------------------------------------------------------
 -- Armor, Resistance, enchantment protection and Thorns
@@ -307,7 +365,8 @@ mcl_damage.register_modifier(function(obj, damage, reason)
 			end
 		end
 		if thorns > 0 then
-			mcl_util.deal_damage(source, thorns, { type = "thorns", direct = obj })
+			mcl_util.deal_damage(source, thorns, { type = "thorns", direct = obj,
+				attack_damage_applied = true })
 		end
 	end
 
